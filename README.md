@@ -9,7 +9,6 @@
 - **Vulnerability Assessment**: Determines if the detected version is within the known vulnerable range.
 - **Middleware Exploitation Test**: Attempts to exploit the **CVE-2025-29927** vulnerability using middleware headers.
 - **Automated Chrome Browser Launch**: Opens the target URL with necessary headers preconfigured to bypass authentication (if vulnerable).
-- **Cross-Platform Compatibility**: Works on both Linux and Windows.
 
 ## **Prerequisites**
 
