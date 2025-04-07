@@ -2,4 +2,4 @@ wappalyzer
 requests
 colorama
 selenium
-
+prompt_toolkit
