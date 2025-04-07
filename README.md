@@ -41,6 +41,7 @@
    requests
    colorama
    selenium
+   prompt_toolkit
    ```
 
 3. **Download ChromeDriver**
